@@ -1,0 +1,205 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/smartHomeHub/SmartIR/codes/climate/schema.json",
+  "title": "SmartIR Climate Remote Code File",
+  "description": "Schema for SmartIR climate device IR code files. Each file describes one remote control layout and its IR codes organized by operation mode, fan speed, optional swing position, and temperature.",
+  "type": "object",
+  "required": [
+    "manufacturer",
+    "supportedModels",
+    "supportedController",
+    "commandsEncoding",
+    "minTemperature",
+    "maxTemperature",
+    "precision",
+    "operationModes",
+    "fanModes",
+    "commands"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Reference to this schema file for IDE validation and autocomplete."
+    },
+    "manufacturer": {
+      "type": "string",
+      "description": "Name of the AC manufacturer (e.g. 'Samsung', 'LG', 'Daikin')."
+    },
+    "supportedModels": {
+      "type": "array",
+      "description": "List of model names or series that this remote code file is compatible with.",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "supportedController": {
+      "type": "string",
+      "description": "IR controller integration to use (e.g. 'Broadlink', 'Xiaomi', 'MQTT')."
+    },
+    "commandsEncoding": {
+      "type": "string",
+      "description": "Encoding format of the IR code strings.",
+      "enum": ["Base64", "Hex", "Raw", "Pronto"]
+    },
+    "minTemperature": {
+      "type": "number",
+      "description": "Minimum supported temperature setpoint."
+    },
+    "maxTemperature": {
+      "type": "number",
+      "description": "Maximum supported temperature setpoint."
+    },
+    "precision": {
+      "type": "number",
+      "description": "Temperature step precision (e.g. 1.0 for whole degrees, 0.5 for half degrees, 2.0 for 2-degree steps)."
+    },
+    "operationModes": {
+      "type": "array",
+      "description": "HVAC modes supported by this remote. Standard Home Assistant modes are preferred, but some manufacturers use proprietary mode names (e.g. 'ifeel', 'ion', 'ai', 'money_saver').",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "fanModes": {
+      "type": "array",
+      "description": "Fan speed modes supported by this remote.",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "swingModes": {
+      "type": "array",
+      "description": "Swing/louver positions supported by this remote. When present, the command hierarchy gains an extra level: mode > fan > swing > temperature. Swing modes that are discrete (stateless toggles) should be declared in discrete_commands instead.",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "presetModes": {
+      "type": "array",
+      "description": "Named preset actions available for this remote. These are discrete IR commands that are independent of the main climate state (temperature, mode, fan). Each entry must have a corresponding mapping in discrete_commands.preset. Use descriptive action names (e.g. 'Eco ON', 'Sleep OFF', 'Fast', 'LED').",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "discrete_commands": {
+      "type": "object",
+      "description": "Mapping of discrete (stateless) IR commands that operate independently of the climate hierarchy. Each key is a SmartIR feature ('swing', 'preset'), and its value maps mode/action names to IR command keys in the 'commands' object.",
+      "additionalProperties": false,
+      "properties": {
+        "swing": {
+          "type": "object",
+          "description": "Discrete swing commands indexed by swingMode name. Use when a swing position is a stateless toggle rather than a hierarchical state. Values must reference keys in the top-level 'commands' object.",
+          "additionalProperties": {
+            "type": "string",
+            "description": "Key referencing an IR code string in the top-level 'commands' object."
+          }
+        },
+        "preset": {
+          "type": "object",
+          "description": "Discrete preset commands indexed by presetMode name. Each entry can be a direct command key (string) or an object describing a toggle or stateful command.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Simple stateless toggle: directly references a key in the top-level 'commands' object."
+              },
+              {
+                "type": "object",
+                "description": "Structured command with optional HVAC mode restrictions and action type.",
+                "additionalProperties": false,
+                "properties": {
+                  "toggle": {
+                    "type": "string",
+                    "description": "Stateless toggle: references a command key. The UI returns to 'none' after firing."
+                  },
+                  "on": {
+                    "type": "string",
+                    "description": "Command key to send when activating this preset."
+                  },
+                  "off": {
+                    "type": "string",
+                    "description": "Command key to send when deactivating this preset."
+                  },
+                  "hvac_modes": {
+                    "type": "array",
+                    "description": "HVAC modes in which this preset is available. Omit to make it available in all modes.",
+                    "items": {
+                      "type": "string",
+                      "enum": ["auto", "cool", "dry", "heat", "fan_only"]
+                    },
+                    "minItems": 1,
+                    "uniqueItems": true
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "description": "The IR code hierarchy. Must always contain an 'off' key. The remaining keys are operation mode names matching 'operationModes'. Each mode maps to fan speeds, which optionally map to swing positions, and then to temperature setpoints. Discrete command keys (for swing toggles, presets, etc.) are also stored at the root level of this object.",
+      "required": ["off"],
+      "properties": {
+        "off": {
+          "type": "string",
+          "description": "IR code to turn the unit off."
+        }
+      },
+      "additionalProperties": {
+        "description": "Per-operation-mode fan speed map, or a discrete IR code string.",
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Discrete IR code string (for swing toggles, preset commands, etc.)."
+          },
+          {
+            "type": "object",
+            "description": "Fan speed map. Each key is a fan mode name; value is either a temperature map (3-level hierarchy), a swing-position map (4-level hierarchy), or a plain string indicating the mode is not temperature-controllable.",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "Plain string indicating this fan/mode combination has no temperature control (e.g. 'Temperature setpoint not controllable in this mode.')."
+                },
+                {
+                  "type": "object",
+                  "description": "Temperature map (3-level) or swing-position map (4-level).",
+                  "additionalProperties": {
+                    "description": "IR code string (3-level) or temperature map under a swing position (4-level).",
+                    "oneOf": [
+                      {
+                        "type": ["string", "null"],
+                        "description": "IR code for this mode/fan/temperature combination (3-level hierarchy). Null indicates the combination is not supported."
+                      },
+                      {
+                        "type": "object",
+                        "description": "Temperature map under a swing position (4-level hierarchy: mode > fan > swing > temp).",
+                        "additionalProperties": {
+                          "type": ["string", "null"],
+                          "description": "IR code for this mode/fan/swing/temperature combination. Null indicates not supported."
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "_comment_supported_models": {
+      "type": "string",
+      "description": "Optional comment field for notes about supported models. Not processed by SmartIR."
+    },
+    "_comment_temp": {
+      "type": "string",
+      "description": "Optional comment field for notes about temperature handling. Not processed by SmartIR."
+    },
+    "_comment_modes": {
+      "type": "string",
+      "description": "Optional comment field for notes about operation modes. Not processed by SmartIR."
+    }
+  }
+}

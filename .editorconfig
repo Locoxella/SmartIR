@@ -1,0 +1,23 @@
+# EditorConfig — https://editorconfig.org
+# SmartIR uses this file to enforce consistent formatting across editors.
+# Top-most EditorConfig file: stop looking for others above this directory.
+root = true
+
+# ─── Universal defaults ───────────────────────────────────────────────────────
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_size = 2
+indent_style = space
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+# PEP 8 mandates 4-space indentation.
+[*.py]
+indent_size = 4
+
+# ─── Markdown ─────────────────────────────────────────────────────────────────
+# Trailing whitespace is intentionally preserved (two trailing spaces = <br>).
+[*.md]
+trim_trailing_whitespace = false

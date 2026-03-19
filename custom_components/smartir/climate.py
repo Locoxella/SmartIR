@@ -37,7 +37,8 @@ SUPPORT_FLAGS = (
     ClimateEntityFeature.TURN_OFF |
     ClimateEntityFeature.TURN_ON |
     ClimateEntityFeature.TARGET_TEMPERATURE | 
-    ClimateEntityFeature.FAN_MODE
+    ClimateEntityFeature.FAN_MODE |
+    ClimateEntityFeature.PRESET_MODE
 )
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
@@ -123,12 +124,15 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         self._operation_modes = [HVACMode.OFF] + valid_hvac_modes
         self._fan_modes = device_data['fanModes']
         self._swing_modes = device_data.get('swingModes')
+        self._preset_modes = device_data.get('presetModes')
+        self._discrete_commands = device_data.get('discrete_commands', {})
         self._commands = device_data['commands']
 
         self._target_temperature = self._min_temperature
         self._hvac_mode = HVACMode.OFF
         self._current_fan_mode = self._fan_modes[0]
         self._current_swing_mode = None
+        self._current_preset_mode = None
         self._last_on_operation = None
 
         self._current_temperature = None
@@ -270,6 +274,32 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
         return self._current_swing_mode
 
     @property
+    def preset_modes(self):
+        """Return the list of available preset modes for the current HVAC mode."""
+        # Always include 'none' as the first option to allow disabling presets
+        allowed_presets = ["none"]
+        
+        if not self._preset_modes:
+            return allowed_presets
+            
+        # Dynamic filtering: only show presets allowed in the current HVAC mode
+        for preset in self._preset_modes:
+            config = self._discrete_commands.get('preset', {}).get(preset)
+            if isinstance(config, dict) and 'hvac_modes' in config:
+                if self._hvac_mode.lower() in [m.lower() for m in config['hvac_modes']]:
+                    allowed_presets.append(preset)
+            else:
+                # If no restriction, assume always available
+                allowed_presets.append(preset)
+        
+        return allowed_presets
+
+    @property
+    def preset_mode(self):
+        """Return the current preset mode."""
+        return self._current_preset_mode
+
+    @property
     def current_temperature(self):
         """Return the current temperature."""
         return self._current_temperature
@@ -334,6 +364,16 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
 
     async def async_set_fan_mode(self, fan_mode):
         """Set fan mode."""
+        # If the fan mode is declared as discrete in the JSON, 
+        # send its specific IR code independently of the hierarchy.
+        discrete_key = self._discrete_commands.get('fan', {}).get(fan_mode)
+        if discrete_key and discrete_key in self._commands:
+            await self._controller.send(self._commands[discrete_key])
+            # Return without updating state if it's a "one-off" toggle,
+            # or continue if we want to keep the state.
+            # Assuming discrete = stateless pulse for now.
+            return
+
         self._current_fan_mode = fan_mode
         
         if not self._hvac_mode.lower() == HVACMode.OFF:
@@ -342,10 +382,67 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
 
     async def async_set_swing_mode(self, swing_mode):
         """Set swing mode."""
+        # If the swing mode is declared as discrete in the JSON, 
+        # send its specific IR code independently of the hierarchy.
+        discrete_key = self._discrete_commands.get('swing', {}).get(swing_mode)
+        if discrete_key and discrete_key in self._commands:
+            await self._controller.send(self._commands[discrete_key])
+            return
+
         self._current_swing_mode = swing_mode
 
         if not self._hvac_mode.lower() == HVACMode.OFF:
             await self.send_command()
+        self.async_write_ha_state()
+
+    async def async_set_preset_mode(self, preset_mode):
+        """Set preset mode."""
+        if preset_mode == "none":
+            preset_mode = None
+
+        # 1. Handle Turning OFF the current preset if it was stateful
+        if self._current_preset_mode and self._current_preset_mode != preset_mode:
+            current_config = self._discrete_commands.get('preset', {}).get(self._current_preset_mode)
+            if isinstance(current_config, dict) and 'off' in current_config:
+                off_key = current_config['off']
+                if off_key in self._commands:
+                    await self._controller.send(self._commands[off_key])
+                    if preset_mode:
+                        await asyncio.sleep(self._delay)
+
+        # 2. Update the internal state (temporarily)
+        old_preset = self._current_preset_mode
+        self._current_preset_mode = preset_mode
+
+        # 3. Handle Turning ON the new preset
+        if preset_mode:
+            requested_config = self._discrete_commands.get('preset', {}).get(preset_mode)
+            if requested_config:
+                if isinstance(requested_config, dict):
+                    if 'toggle' in requested_config:
+                        # Stateless toggle preset: send IR and reset state to None
+                        toggle_key = requested_config['toggle']
+                        if toggle_key in self._commands:
+                            await self._controller.send(self._commands[toggle_key])
+                        self._current_preset_mode = None 
+                    else:
+                        # Stateful preset: use 'on' code
+                        on_key = requested_config.get('on')
+                        if on_key and on_key in self._commands:
+                            await self._controller.send(self._commands[on_key])
+                else:
+                    # Simple discrete toggle (stateless string): send IR and reset state to None
+                    if requested_config in self._commands:
+                        await self._controller.send(self._commands[requested_config])
+                    self._current_preset_mode = None
+                
+                self.async_write_ha_state()
+                return
+
+            # If not a discrete command, it must be in the hierarchy
+            if not self._hvac_mode.lower() == HVACMode.OFF:
+                await self.send_command()
+        
         self.async_write_ha_state()
 
     async def async_turn_off(self):
@@ -376,12 +473,39 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
                     await self._controller.send(self._commands['on'])
                     await asyncio.sleep(self._delay)
 
-                if self._support_swing == True:
-                    await self._controller.send(
-                        self._commands[operation_mode][fan_mode][swing_mode][target_temperature])
+                # Dynamic Hierarchy Traversal
+                # We start with the operation mode (Cool, Heat, etc.)
+                node = self._commands.get(operation_mode)
+                if not node:
+                    _LOGGER.error("Mode %s not found in commands", operation_mode)
+                    return
+
+                # We attempt to traverse through Fan and Swing modes 
+                # ONLY if they are NOT declared as discrete in the JSON.
+                # This allows SmartIR to handle 2-level, 3-level or 4-level trees.
+                
+                # 1. Level: Fan (skip if discrete)
+                if not self._discrete_commands.get('fan', {}).get(fan_mode):
+                    if fan_mode in node and isinstance(node[fan_mode], dict):
+                        node = node[fan_mode]
+
+                # 2. Level: Swing (skip if discrete)
+                if not self._discrete_commands.get('swing', {}).get(swing_mode):
+                    if swing_mode in node and isinstance(node[swing_mode], dict):
+                        node = node[swing_mode]
+
+                # 3. Level: Preset (skip if discrete)
+                preset_mode = self._current_preset_mode
+                if not self._discrete_commands.get('preset', {}).get(preset_mode):
+                    if preset_mode in node and isinstance(node[preset_mode], dict):
+                        node = node[preset_mode]
+
+                # 4. Final Level: Temperature
+                if target_temperature in node:
+                    await self._controller.send(node[target_temperature])
                 else:
-                    await self._controller.send(
-                        self._commands[operation_mode][fan_mode][target_temperature])
+                    _LOGGER.error("Temp %s not found in hierarchy for %s/%s", 
+                                 target_temperature, operation_mode, fan_mode)
 
             except Exception as e:
                 _LOGGER.exception(e)
