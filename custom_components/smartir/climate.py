@@ -37,8 +37,7 @@ SUPPORT_FLAGS = (
     ClimateEntityFeature.TURN_OFF |
     ClimateEntityFeature.TURN_ON |
     ClimateEntityFeature.TARGET_TEMPERATURE | 
-    ClimateEntityFeature.FAN_MODE |
-    ClimateEntityFeature.PRESET_MODE
+    ClimateEntityFeature.FAN_MODE
 )
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
@@ -148,6 +147,9 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
             self._support_flags = self._support_flags | ClimateEntityFeature.SWING_MODE
             self._current_swing_mode = self._swing_modes[0]
             self._support_swing = True
+
+        if self._preset_modes:
+            self._support_flags = self._support_flags | ClimateEntityFeature.PRESET_MODE
 
         self._temp_lock = asyncio.Lock()
         self._on_by_remote = False
@@ -276,11 +278,11 @@ class SmartIRClimate(ClimateEntity, RestoreEntity):
     @property
     def preset_modes(self):
         """Return the list of available preset modes for the current HVAC mode."""
+        if not self._preset_modes:
+            return None
+
         # Always include 'none' as the first option to allow disabling presets
         allowed_presets = ["none"]
-        
-        if not self._preset_modes:
-            return allowed_presets
             
         # Dynamic filtering: only show presets allowed in the current HVAC mode
         for preset in self._preset_modes:
