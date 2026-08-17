@@ -28,7 +28,7 @@ jobs:
           echo "UPSTREAM_TAG=$UPSTREAM_TAG" >> $GITHUB_ENV
           
           # Buscar si ya existe algún release en el fork para esta versión de upstream
-          LATEST_FORK_TAG=$(gh api repos/${{ github.repository }}/releases --jq ".[].tag_name | select(starts_with(\"${UPSTREAM_TAG}-samsung\"))" | head -n 1)
+          LATEST_FORK_TAG=$(gh release list --repo ${{ github.repository }} --json tagName --jq ".[].tagName | select(startswith(\"${UPSTREAM_TAG}-samsung\"))" | head -n 1)
           
           if [ -z "$LATEST_FORK_TAG" ]; then
             MY_TAG="${UPSTREAM_TAG}-samsung.1"
@@ -58,6 +58,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$MY_TAG" \
+            --repo "${{ github.repository }}" \
             --target add-samsung-1409-preset-mode-support \
             --title "$MY_TAG" \
             --notes "Release automática sincronizada con upstream SmartIR $UPSTREAM_TAG + soporte Samsung A/C."
