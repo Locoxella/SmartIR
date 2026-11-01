@@ -4,7 +4,16 @@ on:
   schedule:
     # Corre automáticamente cada 6 horas
     - cron: '0 */6 * * *'
-  workflow_dispatch: # Permite ejecutar el workflow manualmente desde la pestaña Actions en GitHub
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Forzar la creación de un nuevo release incremental (ej. samsung.2)'
+        type: boolean
+        default: false
+      custom_notes:
+        description: 'Notas personalizadas adicionales para el release (opcional)'
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -19,7 +28,7 @@ jobs:
           ref: add-samsung-1409-preset-mode-support
           fetch-depth: 0
 
-      - name: Fetch Upstream Releases
+      - name: Fetch Upstream Releases & Determine Tag
         id: check_upstream
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -27,18 +36,43 @@ jobs:
           UPSTREAM_TAG=$(gh api repos/smartHomeHub/SmartIR/releases/latest --jq '.tag_name')
           echo "UPSTREAM_TAG=$UPSTREAM_TAG" >> $GITHUB_ENV
           
-          # Buscar si ya existe algún release en el fork para esta versión de upstream
-          LATEST_FORK_TAG=$(gh release list --repo ${{ github.repository }} --json tagName --jq ".[].tagName | select(startswith(\"${UPSTREAM_TAG}-samsung\"))" | head -n 1)
+          # Buscar todas las releases existentes en el fork para esta versión upstream
+          EXISTING_TAGS=$(gh release list --repo ${{ github.repository }} --json tagName --jq ".[].tagName | select(startswith(\"${UPSTREAM_TAG}-samsung.\"))")
           
-          if [ -z "$LATEST_FORK_TAG" ]; then
-            MY_TAG="${UPSTREAM_TAG}-samsung.1"
-            echo "SHOULD_RELEASE=true" >> $GITHUB_ENV
+          if [ -z "$EXISTING_TAGS" ]; then
+            # No existe ninguna release previa para esta versión de upstream
+            NEXT_SUFFIX=1
+            MY_TAG="${UPSTREAM_TAG}-samsung.${NEXT_SUFFIX}"
+            SHOULD_RELEASE="true"
+            RELEASE_REASON="Nueva versión de upstream disponible ($UPSTREAM_TAG)"
           else
-            echo "Ya existe una release en el fork para $UPSTREAM_TAG ($LATEST_FORK_TAG)."
-            echo "SHOULD_RELEASE=false" >> $GITHUB_ENV
-            MY_TAG="$LATEST_FORK_TAG"
+            # Extraer el mayor sufijo numérico para calcular el siguiente release
+            MAX_SUFFIX=$(echo "$EXISTING_TAGS" | sed -E "s/^.*-samsung\.([0-9]+)$/\1/" | sort -n | tail -n 1)
+            NEXT_SUFFIX=$((MAX_SUFFIX + 1))
+            MY_TAG="${UPSTREAM_TAG}-samsung.${NEXT_SUFFIX}"
+            LATEST_TAG=$(echo "$EXISTING_TAGS" | head -n 1)
+            
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_release }}" = "true" ]; then
+              SHOULD_RELEASE="true"
+              RELEASE_REASON="Release forzado manualmente (versión $MY_TAG)"
+            else
+              # Comprobar si hay commits nuevos en la rama desde el último tag de release
+              COMMITS_AHEAD=$(git rev-list "${LATEST_TAG}..HEAD" --count 2>/dev/null || echo "1")
+              if [ "$COMMITS_AHEAD" -gt 0 ] && [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+                SHOULD_RELEASE="true"
+                RELEASE_REASON="Hay $COMMITS_AHEAD commit(s) nuevos desde $LATEST_TAG"
+              else
+                echo "Ya existe release en el fork ($LATEST_TAG) para upstream $UPSTREAM_TAG y no hay cambios nuevos para publicar."
+                SHOULD_RELEASE="false"
+                RELEASE_REASON="Sin cambios nuevos"
+              fi
+            fi
           fi
+          
           echo "MY_TAG=$MY_TAG" >> $GITHUB_ENV
+          echo "SHOULD_RELEASE=$SHOULD_RELEASE" >> $GITHUB_ENV
+          echo "RELEASE_REASON=$RELEASE_REASON" >> $GITHUB_ENV
+          echo "Determinado tag: $MY_TAG (Publicar: $SHOULD_RELEASE - Motivo: $RELEASE_REASON)"
 
       - name: Sync & Merge Upstream
         if: env.SHOULD_RELEASE == 'true'
@@ -49,16 +83,44 @@ jobs:
           git remote add upstream https://github.com/smartHomeHub/SmartIR.git || true
           git fetch upstream master
           
-          git merge upstream/master -m "Merge upstream master ($UPSTREAM_TAG) into add-samsung-1409-preset-mode-support"
-          git push origin add-samsung-1409-preset-mode-support
+          if git merge upstream/master -m "Merge upstream master ($UPSTREAM_TAG) into add-samsung-1409-preset-mode-support"; then
+            git push origin add-samsung-1409-preset-mode-support
+          else
+            echo "Conflicto detectado durante el merge con upstream master. Abortando merge automático."
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Package SmartIR for HACS (smartir.zip)
+        if: env.SHOULD_RELEASE == 'true'
+        run: |
+          rm -rf build smartir.zip
+          mkdir -p build/custom_components/smartir
+          cp -r custom_components/smartir/* build/custom_components/smartir/
+          
+          # Incluir códigos dentro del paquete para disponibilidad inmediata en HACS
+          if [ -d "codes" ]; then
+            mkdir -p build/custom_components/smartir/codes
+            cp -r codes/* build/custom_components/smartir/codes/
+          fi
+          
+          cd build
+          zip -r ../smartir.zip custom_components/
+          cd ..
 
       - name: Create Release in Fork
         if: env.SHOULD_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$MY_TAG" \
+          NOTES="Release automática sincronizada con upstream SmartIR $UPSTREAM_TAG + soporte Samsung A/C y mejoras."
+          CUSTOM_NOTES="${{ inputs.custom_notes }}"
+          if [ -n "$CUSTOM_NOTES" ]; then
+            NOTES=$(printf "%s\n\n### Notas adicionales:\n%s" "$NOTES" "$CUSTOM_NOTES")
+          fi
+          
+          gh release create "$MY_TAG" smartir.zip \
             --repo "${{ github.repository }}" \
             --target add-samsung-1409-preset-mode-support \
             --title "$MY_TAG" \
-            --notes "Release automática sincronizada con upstream SmartIR $UPSTREAM_TAG + soporte Samsung A/C."
+            --notes "$NOTES"

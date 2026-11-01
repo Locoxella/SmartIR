@@ -867,3 +867,17 @@ FodyWeavers.xsd
 # Additional files built by Visual Studio
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,linux,macos,visualstudiocode,visualstudio,python,vim,emacs,intellij+all,pycharm+all,jupyter
+
+# --- Custom Project Rules ---
+# Local virtual environment
+.venv/
+
+# Build and release artifacts
+build/
+dist/
+*.zip
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/

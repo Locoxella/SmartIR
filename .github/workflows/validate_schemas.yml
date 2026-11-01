@@ -1,0 +1,36 @@
+name: Validate Climate Code Schemas
+
+on:
+  push:
+    paths:
+      - 'codes/climate/**'
+      - 'tests/**'
+      - '.github/workflows/validate_schemas.yml'
+  pull_request:
+    paths:
+      - 'codes/climate/**'
+      - 'tests/**'
+      - '.github/workflows/validate_schemas.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-schemas:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install jsonschema pytest
+
+      - name: Run Schema Validation via pytest
+        run: |
+          pytest -v tests/test_climate_codes.py
