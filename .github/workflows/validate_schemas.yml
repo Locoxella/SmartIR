@@ -5,11 +5,13 @@ on:
     paths:
       - 'codes/climate/**'
       - 'tests/**'
+      - 'requirements-test.txt'
       - '.github/workflows/validate_schemas.yml'
   pull_request:
     paths:
       - 'codes/climate/**'
       - 'tests/**'
+      - 'requirements-test.txt'
       - '.github/workflows/validate_schemas.yml'
   workflow_dispatch:
 
@@ -25,11 +27,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: 'requirements-test.txt'
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install jsonschema pytest
+          pip install -r requirements-test.txt
 
       - name: Run Schema Validation via pytest
         run: |
